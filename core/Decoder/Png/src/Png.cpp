@@ -86,15 +86,16 @@ int paethPredictor(int left, int up, int upLeft) {
     return upDistance <= upLeftDistance ? up : upLeft;
 }
 
-std::uint64_t filterRow(const std::uint8_t* row, const std::uint8_t* previousRow, std::size_t rowSize, std::size_t pixelSize,
-                        std::uint8_t filterType, std::uint8_t* filtered) {
+template<std::uint8_t TFilterType>
+std::uint64_t filterRowSpecialized(const std::uint8_t* row, const std::uint8_t* previousRow, std::size_t rowSize, std::size_t pixelSize,
+                                  std::uint8_t* filtered) {
     std::uint64_t cost = 0;
     for (std::size_t i = 0; i < rowSize; ++i) {
         const int left = i >= pixelSize ? row[i - pixelSize] : 0;
         const int up = previousRow ? previousRow[i] : 0;
         const int upLeft = previousRow && i >= pixelSize ? previousRow[i - pixelSize] : 0;
         int prediction = 0;
-        switch (filterType) {
+        switch (TFilterType) {
         case 1:
             prediction = left;
             break;
@@ -114,6 +115,18 @@ std::uint64_t filterRow(const std::uint8_t* row, const std::uint8_t* previousRow
         cost += filtered[i] < 0x80 ? filtered[i] : 0x100u - filtered[i];
     }
     return cost;
+}
+
+std::uint64_t filterRow(const std::uint8_t* row, const std::uint8_t* previousRow, std::size_t rowSize, std::size_t pixelSize,
+                        std::uint8_t filterType, std::uint8_t* filtered) {
+    switch (filterType) {
+    case 0: return filterRowSpecialized<0>(row, previousRow, rowSize, pixelSize, filtered);
+    case 1: return filterRowSpecialized<1>(row, previousRow, rowSize, pixelSize, filtered);
+    case 2: return filterRowSpecialized<2>(row, previousRow, rowSize, pixelSize, filtered);
+    case 3: return filterRowSpecialized<3>(row, previousRow, rowSize, pixelSize, filtered);
+    case 4: return filterRowSpecialized<4>(row, previousRow, rowSize, pixelSize, filtered);
+    default: throw std::invalid_argument("Png::Encode: unsupported filter");
+    }
 }
 
 }  // namespace
