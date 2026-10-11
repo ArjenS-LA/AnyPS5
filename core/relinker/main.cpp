@@ -28,6 +28,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -115,11 +116,23 @@ int Run(const int argc, char* argv[]) {
             const std::filesystem::path outFsPath = Io::NativePath(absPath);
             const std::string registryPath = Io::Utf8Path(outFsPath.parent_path() / Io::NativePath(Io::Utf8Path(outFsPath.stem()) + ".registry.json"));
             const auto registryWriter = std::make_shared<Relinker::CallRegistryWriter>();
-            fileWriter.Write(registryPath, registryWriter->WriteCallRegistry(result.RegistryEntries));
+            std::vector<std::pair<std::string, std::string>> registries;
+            registries.emplace_back(registryPath, registryWriter->WriteCallRegistry(result.RegistryEntries));
             for (const auto& artifact : guestArtifacts) {
                 const auto modulePath = outFsPath.parent_path() / Io::NativePath(Io::Utf8Path(outFsPath.stem()) + "." + Io::Utf8Path(artifact.Path.filename()) + ".registry.json");
-                fileWriter.Write(Io::Utf8Path(modulePath), registryWriter->WriteModuleImports(artifact.Imports));
+                registries.emplace_back(Io::Utf8Path(modulePath), registryWriter->WriteModuleImports(artifact.Imports));
             }
+            for (const auto& [path, content] : registries) {
+                const auto target = Io::NativePath(path);
+                if (!std::filesystem::exists(target)) continue;
+                if (std::filesystem::equivalent(Io::NativePath(args.inputPath), target))
+                    throw Domain::RelinkerException("Registry output would overwrite an input executable: " + path);
+                for (const auto& artifact : guestArtifacts) {
+                    if (std::filesystem::equivalent(artifact.SourcePath, target))
+                        throw Domain::RelinkerException("Registry output would overwrite an input module: " + path);
+                }
+            }
+            for (const auto& [path, content] : registries) fileWriter.Write(path, content);
         }
 
         auto byteWriter = std::make_shared<Io::ByteWriter>();

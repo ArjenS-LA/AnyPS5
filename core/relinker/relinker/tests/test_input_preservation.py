@@ -7,12 +7,55 @@ import tempfile
 from test_guest_intel_trampolines import PLAIN_SITE, guest_fixture, main_fixture
 
 
+def check_registry_inputs(relinker, work, windows):
+    for registry_kind in ("main", "module"):
+        for protected_kind in ("executable", "module"):
+            for alias in ("direct", "hardlink", "symlink"):
+                if alias == "direct" and protected_kind == "module":
+                    continue
+                case = work / f"registry-{windows}-{registry_kind}-{protected_kind}-{alias}"
+                modules = case / "sce_module"
+                modules.mkdir(parents=True)
+                output = case / ("output.exe" if windows else "output.elf")
+                main_registry = case / "output.registry.json"
+                module_registry = case / "output.sample.prx.guest.prx.registry.json"
+                registry = main_registry if registry_kind == "main" else module_registry
+                source = registry if alias == "direct" else case / "input.elf"
+                source.write_bytes(main_fixture())
+                module = modules / "sample.prx"
+                module.write_bytes(guest_fixture(PLAIN_SITE))
+                protected = source if protected_kind == "executable" else module
+                if alias == "hardlink":
+                    os.link(protected, registry)
+                elif alias == "symlink":
+                    try:
+                        registry.symlink_to(protected)
+                    except OSError as error:
+                        if os.name != "nt" or error.winerror != 1314:
+                            raise
+                        print("Registry symbolic-link case skipped: Windows symlink privilege unavailable")
+                        continue
+                other_registry = module_registry if registry_kind == "main" else main_registry
+                other_registry.write_bytes(b"previous registry")
+                originals = {path: path.read_bytes() for path in case.rglob("*") if path.is_file()}
+                result = subprocess.run([str(relinker), *(["--windows"] if windows else []),
+                                         "--registry", str(source), str(output)],
+                                        capture_output=True, text=True, timeout=20)
+                assert result.returncode == 2 and "Registry output would overwrite an input" in result.stderr, (
+                    registry_kind, protected_kind, alias, result.returncode, result.stdout, result.stderr)
+                assert str(registry) in result.stderr, result.stderr
+                assert not output.exists() and not (case / "app0").exists(), case
+                assert {path: path.read_bytes() for path in case.rglob("*") if path.is_file()} == originals, (
+                    "Registry collision changed an input or an existing registry", case)
+
+
 def main():
     relinker = Path(sys.argv[1]).resolve()
     with tempfile.TemporaryDirectory(prefix="anyps5-input-preservation-") as directory:
         work = Path(directory)
         for windows in (False, True):
             options = ["--windows"] if windows else []
+            check_registry_inputs(relinker, work, windows)
             for bundled in (False, True):
                 for alias in ("direct", "normalized", "hardlink", "symlink"):
                     case = work / f"{windows}-{bundled}-{alias}"
